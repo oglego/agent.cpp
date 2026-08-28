@@ -8,11 +8,24 @@
 #include <optional>
 #include <string>
 #include <thread>
+#include <vector>
 
 namespace agent_cpp {
 
 // Callback for streaming response chunks
 using ResponseCallback = std::function<void(const std::string& chunk)>;
+
+// Configuration for a single LoRA adapter to apply on top of the base model.
+// The adapter must be in GGUF format (see llama.cpp's convert_lora_to_gguf.py)
+// and must be compatible with the base model's architecture.
+struct LoraAdapterConfig
+{
+    // Path to the GGUF LoRA adapter file
+    std::string path;
+    // Strength at which the adapter is applied. 1.0 is the adapter's native
+    // strength; 0.0 effectively disables it without unloading it.
+    float scale = 1.0F;
+};
 
 // Model configuration with sensible defaults
 struct ModelConfig
@@ -36,6 +49,11 @@ struct ModelConfig
     // Optional GBNF grammar and root rule name
     std::string grammar;
     std::string grammar_root = "root";
+    // Optional LoRA adapters to apply on top of the base model. Adapters are
+    // loaded and bound to this Model instance's context, so different Model
+    // instances sharing the same ModelWeights may use different adapters
+    // (or none at all).
+    std::vector<LoraAdapterConfig> lora_adapters;
 };
 
 /// Reads a GBNF file into a string for ModelConfig::grammar
@@ -178,6 +196,14 @@ class Model
     // The loaded state will be applied to the context
     std::vector<llama_token> load_cache(const std::string& cache_path);
 
+    // Get the LoRA adapters currently applied to this model's context, in
+    // the order they were configured
+    [[nodiscard]] const std::vector<LoraAdapterConfig>& get_lora_adapters()
+      const
+    {
+        return config_.lora_adapters;
+    }
+
   private:
     // Set the internal cache state (used when loading from prompt cache)
     void set_cache_state(const std::vector<llama_token>& tokens)
@@ -195,6 +221,10 @@ class Model
     // Non-owning pointer to the grammar sampler in sampler_'s chain
     // Reset this one between turns without resetting the rest of the chain
     llama_sampler* grammar_sampler_ = nullptr;
+    // Owning handles for LoRA adapters loaded for this model's context.
+    // Adapters are valid as long as the associated llama_model (owned by
+    // weights_) is alive, so these must be freed before weights_ is released.
+    std::vector<llama_adapter_lora*> lora_adapters_;
     std::vector<llama_token> processed_tokens_; // Track tokens in KV cache
     int n_past_ = 0;                            // Track position in KV cache
     ModelConfig config_;
