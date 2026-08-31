@@ -230,6 +230,14 @@ Model::generate(const std::vector<common_chat_msg>& messages,
     // Use explicitly configured format, or fall back to auto-detected format
     syntax.format = config_.chat_format.value_or(params.format);
     syntax.parse_tool_calls = true;
+    // IMPORTANT: for the PEG-based formats (PEG_SIMPLE/PEG_NATIVE/etc.),
+    // llama.cpp builds a parser tailored to this specific model's chat
+    // template and returns it serialized in params.parser. If we don't load
+    // it here, common_chat_peg_parse() silently falls back to a "pure
+    // content" parser regardless of `format`, so tool_calls never gets
+    // populated and the raw <tool_call>...</tool_call> text leaks into
+    // content instead of being executed.
+    syntax.parser.load(params.parser);
 
     auto parsed_msg = common_chat_parse(response, false, syntax);
     parsed_msg.role = "assistant";
