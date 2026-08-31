@@ -6,6 +6,23 @@ This directory contains example applications demonstrating agent.cpp capabilitie
 
 The [grammar](./grammar) example demonstrates constraining model output to a GBNF grammar, so every response is guaranteed to match a fixed structure. You can also point it at a custom grammar file and root rule.
 
+## LoRA
+
+The [lora](./lora) example demonstrates loading one or more LoRA adapters on top of a base model and running an interactive chat session.
+
+```
+# Single adapter at full strength
+lora-example -m base.gguf -l my-lora.gguf
+
+# Single adapter at half strength
+lora-example -m base.gguf -l my-lora.gguf -s 0.5
+
+# Two adapters with individual scales
+lora-example -m base.gguf -l style.gguf -s 0.8 -l task.gguf -s 1.0
+```
+
+Adapters must be in GGUF format (use llama.cpp's `convert_lora_to_gguf.py` to convert from the standard HuggingFace safetensors format). Each `-l` flag can optionally be followed by a `-s <scale>` flag to control how strongly that adapter is applied — `1.0` is full strength, `0.0` disables the adapter without unloading it.
+
 ## Shared Utilities
 
 The [shared](./shared) directory contains reusable helper components used across multiple examples. These are **not part of the public API** but can be useful as reference implementations.

@@ -27,6 +27,17 @@ struct LoraAdapterConfig
     float scale = 1.0F;
 };
 
+// Owns a LoRA adapter handle loaded by llama.cpp.
+struct LoraAdapterDeleter
+{
+    void operator()(llama_adapter_lora* adapter) const noexcept
+    {
+        llama_adapter_lora_free(adapter);
+    }
+};
+
+using LoraAdapterHandle = std::unique_ptr<llama_adapter_lora, LoraAdapterDeleter>;
+
 // Model configuration with sensible defaults
 struct ModelConfig
 {
@@ -55,6 +66,12 @@ struct ModelConfig
     // (or none at all).
     std::vector<LoraAdapterConfig> lora_adapters;
 };
+
+/// Returns only the LoRA adapters that are actually applied by llama.cpp.
+/// Adapters with a zero scale are omitted because llama.cpp treats them as
+/// disabled.
+[[nodiscard]] std::vector<LoraAdapterConfig>
+filter_active_lora_adapters(const std::vector<LoraAdapterConfig>& lora_adapters);
 
 /// Reads a GBNF file into a string for ModelConfig::grammar
 /// @throws ModelError if the file cannot be opened or is empty
@@ -196,12 +213,12 @@ class Model
     // The loaded state will be applied to the context
     std::vector<llama_token> load_cache(const std::string& cache_path);
 
-    // Get the LoRA adapters currently applied to this model's context, in
-    // the order they were configured
+    // Get the LoRA adapters currently applied to this model's context.
+    // Zero-scale adapters are omitted because llama.cpp ignores them.
     [[nodiscard]] const std::vector<LoraAdapterConfig>& get_lora_adapters()
       const
     {
-        return config_.lora_adapters;
+        return active_lora_adapters_;
     }
 
   private:
@@ -223,8 +240,9 @@ class Model
     llama_sampler* grammar_sampler_ = nullptr;
     // Owning handles for LoRA adapters loaded for this model's context.
     // Adapters are valid as long as the associated llama_model (owned by
-    // weights_) is alive, so these must be freed before weights_ is released.
-    std::vector<llama_adapter_lora*> lora_adapters_;
+    // weights_) is alive, so these handles must outlive the context.
+    std::vector<LoraAdapterHandle> lora_adapters_;
+    std::vector<LoraAdapterConfig> active_lora_adapters_;
     std::vector<llama_token> processed_tokens_; // Track tokens in KV cache
     int n_past_ = 0;                            // Track position in KV cache
     ModelConfig config_;

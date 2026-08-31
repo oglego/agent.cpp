@@ -26,6 +26,24 @@ load_grammar_file(const std::string& grammar_path)
     return grammar;
 }
 
+std::vector<LoraAdapterConfig>
+filter_active_lora_adapters(const std::vector<LoraAdapterConfig>& lora_adapters)
+{
+    std::vector<LoraAdapterConfig> active_lora_adapters;
+    active_lora_adapters.reserve(lora_adapters.size());
+
+    for (const auto& lora_adapter : lora_adapters) {
+        // Exact zero comparison is intentional: 0.0F is the documented
+        // user-supplied sentinel meaning "disabled". It is never the result
+        // of floating-point arithmetic, so a direct equality check is safe.
+        if (lora_adapter.scale != 0.0F) {
+            active_lora_adapters.push_back(lora_adapter);
+        }
+    }
+
+    return active_lora_adapters;
+}
+
 std::shared_ptr<ModelWeights>
 ModelWeights::create(const std::string& model_path)
 {
@@ -80,11 +98,6 @@ Model::~Model()
     if (sampler_ != nullptr) {
         llama_sampler_free(sampler_);
     }
-    // LoRA adapters must be freed before the context/model, since they are
-    // only guaranteed valid while their associated llama_model is alive.
-    for (llama_adapter_lora* adapter : lora_adapters_) {
-        llama_adapter_lora_free(adapter);
-    }
     if (ctx_ != nullptr) {
         llama_free(ctx_);
     }
@@ -97,6 +110,7 @@ Model::Model(Model&& other) noexcept
   , sampler_(other.sampler_)
   , grammar_sampler_(other.grammar_sampler_)
   , lora_adapters_(std::move(other.lora_adapters_))
+  , active_lora_adapters_(std::move(other.active_lora_adapters_))
   , processed_tokens_(std::move(other.processed_tokens_))
   , n_past_(other.n_past_)
   , config_(other.config_)
@@ -114,9 +128,6 @@ Model::operator=(Model&& other) noexcept
         if (sampler_ != nullptr) {
             llama_sampler_free(sampler_);
         }
-        for (llama_adapter_lora* adapter : lora_adapters_) {
-            llama_adapter_lora_free(adapter);
-        }
         if (ctx_ != nullptr) {
             llama_free(ctx_);
         }
@@ -126,6 +137,7 @@ Model::operator=(Model&& other) noexcept
         sampler_ = other.sampler_;
         grammar_sampler_ = other.grammar_sampler_;
         lora_adapters_ = std::move(other.lora_adapters_);
+        active_lora_adapters_ = std::move(other.active_lora_adapters_);
         processed_tokens_ = std::move(other.processed_tokens_);
         n_past_ = other.n_past_;
         config_ = other.config_;
@@ -156,25 +168,30 @@ Model::initialize_context(const ModelConfig& model_config)
         throw ModelError("failed to create llama context");
     }
 
-    if (!model_config.lora_adapters.empty()) {
-        std::vector<float> scales;
-        scales.reserve(model_config.lora_adapters.size());
-        lora_adapters_.reserve(model_config.lora_adapters.size());
+    active_lora_adapters_ = filter_active_lora_adapters(model_config.lora_adapters);
 
-        for (const auto& lora_config : model_config.lora_adapters) {
+    if (!active_lora_adapters_.empty()) {
+        std::vector<llama_adapter_lora*> raw_lora_adapters;
+        std::vector<float> scales;
+        scales.reserve(active_lora_adapters_.size());
+        raw_lora_adapters.reserve(active_lora_adapters_.size());
+        lora_adapters_.reserve(active_lora_adapters_.size());
+
+        for (const auto& lora_config : active_lora_adapters_) {
             llama_adapter_lora* adapter = llama_adapter_lora_init(
               weights_->get_model(), lora_config.path.c_str());
             if (adapter == nullptr) {
                 throw ModelError("failed to load LoRA adapter '" +
                                  lora_config.path + "'");
             }
-            lora_adapters_.push_back(adapter);
+            lora_adapters_.emplace_back(adapter);
+            raw_lora_adapters.push_back(lora_adapters_.back().get());
             scales.push_back(lora_config.scale);
         }
 
         if (llama_set_adapters_lora(ctx_,
-                                    lora_adapters_.data(),
-                                    lora_adapters_.size(),
+                                    raw_lora_adapters.data(),
+                                    raw_lora_adapters.size(),
                                     scales.data()) != 0) {
             throw ModelError("failed to apply LoRA adapter(s) to context");
         }

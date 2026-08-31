@@ -56,9 +56,10 @@ target_include_directories(model
         $<BUILD_INTERFACE:${LLAMA_SOURCE_DIR}/common>
         $<BUILD_INTERFACE:${LLAMA_SOURCE_DIR}/ggml/include>
         $<BUILD_INTERFACE:${LLAMA_SOURCE_DIR}/include>
+        $<BUILD_INTERFACE:${LLAMA_SOURCE_DIR}/vendor>
         $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}/agent-cpp>
 )
-target_link_libraries(model PUBLIC common llama)
+target_link_libraries(model PUBLIC llama-common llama)
 target_compile_features(model PUBLIC cxx_std_17)
 
 add_library(agent STATIC src/agent.cpp)
@@ -72,7 +73,7 @@ target_include_directories(agent
         $<BUILD_INTERFACE:${LLAMA_SOURCE_DIR}/vendor>
         $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}/agent-cpp>
 )
-target_link_libraries(agent PUBLIC model common llama)
+target_link_libraries(agent PUBLIC model llama-common llama)
 target_compile_features(agent PUBLIC cxx_std_17)
 
 # MCP Client library for connecting to MCP servers via HTTP
@@ -93,7 +94,7 @@ if(AGENT_CPP_BUILD_MCP)
             $<BUILD_INTERFACE:${LLAMA_SOURCE_DIR}/common>
             $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}/agent-cpp>
     )
-    target_link_libraries(mcp_client PUBLIC common OpenSSL::SSL OpenSSL::Crypto)
+    target_link_libraries(mcp_client PUBLIC llama-common OpenSSL::SSL OpenSSL::Crypto)
     target_compile_features(mcp_client PUBLIC cxx_std_17)
 
     message(STATUS "MCP client enabled (using cpp-httplib)")
@@ -117,7 +118,7 @@ if(AGENT_CPP_BUILD_OAUTH)
             $<BUILD_INTERFACE:${LLAMA_SOURCE_DIR}/common>
             $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}/agent-cpp>
     )
-    target_link_libraries(oauth PUBLIC common OpenSSL::SSL OpenSSL::Crypto)
+    target_link_libraries(oauth PUBLIC llama-common OpenSSL::SSL OpenSSL::Crypto)
     target_compile_features(oauth PUBLIC cxx_std_17)
 
     message(STATUS "OAuth client enabled (using cpp-httplib)")
@@ -128,7 +129,7 @@ if(AGENT_CPP_BUILD_TESTS)
 
     add_executable(test_tool tests/test_tool.cpp)
     target_include_directories(test_tool PRIVATE src tests)
-    target_link_libraries(test_tool PRIVATE common llama)
+    target_link_libraries(test_tool PRIVATE llama-common llama)
     target_compile_features(test_tool PRIVATE cxx_std_17)
 
     add_executable(test_grammar tests/test_grammar.cpp)
@@ -140,8 +141,20 @@ if(AGENT_CPP_BUILD_TESTS)
         ${LLAMA_SOURCE_DIR}/include
         ${LLAMA_SOURCE_DIR}/vendor
     )
-    target_link_libraries(test_grammar PRIVATE model common llama)
+    target_link_libraries(test_grammar PRIVATE model llama-common llama)
     target_compile_features(test_grammar PRIVATE cxx_std_17)
+
+    add_executable(test_lora tests/test_lora.cpp)
+    target_include_directories(test_lora PRIVATE
+        src
+        tests
+        ${LLAMA_SOURCE_DIR}/common
+        ${LLAMA_SOURCE_DIR}/ggml/include
+        ${LLAMA_SOURCE_DIR}/include
+        ${LLAMA_SOURCE_DIR}/vendor
+    )
+    target_link_libraries(test_lora PRIVATE model llama-common llama)
+    target_compile_features(test_lora PRIVATE cxx_std_17)
 
     add_executable(test_callbacks tests/test_callbacks.cpp)
     target_include_directories(test_callbacks PRIVATE
@@ -152,12 +165,13 @@ if(AGENT_CPP_BUILD_TESTS)
         ${LLAMA_SOURCE_DIR}/include
         ${LLAMA_SOURCE_DIR}/vendor
     )
-    target_link_libraries(test_callbacks PRIVATE agent model common llama)
+    target_link_libraries(test_callbacks PRIVATE agent model llama-common llama)
     target_compile_features(test_callbacks PRIVATE cxx_std_17)
 
     add_test(NAME ToolTests COMMAND test_tool)
     add_test(NAME CallbacksTests COMMAND test_callbacks)
     add_test(NAME GrammarTests COMMAND test_grammar)
+    add_test(NAME LoraTests COMMAND test_lora)
 
     if(AGENT_CPP_BUILD_MCP)
         add_executable(test_mcp_client tests/test_mcp_client.cpp)
@@ -166,7 +180,7 @@ if(AGENT_CPP_BUILD_TESTS)
             tests
             ${LLAMA_SOURCE_DIR}/common
         )
-        target_link_libraries(test_mcp_client PRIVATE mcp_client common)
+        target_link_libraries(test_mcp_client PRIVATE mcp_client llama-common)
         target_compile_features(test_mcp_client PRIVATE cxx_std_17)
 
         add_test(NAME MCPClientTests COMMAND test_mcp_client)
@@ -175,7 +189,7 @@ if(AGENT_CPP_BUILD_TESTS)
     # On Windows, DLLs are placed in the bin/ directory by llama.cpp
     # We need to add this directory to PATH so tests can find the DLLs
     if(WIN32)
-        set_tests_properties(ToolTests CallbacksTests GrammarTests PROPERTIES
+        set_tests_properties(ToolTests CallbacksTests GrammarTests LoraTests PROPERTIES
             ENVIRONMENT "PATH=${CMAKE_BINARY_DIR}/bin\;$ENV{PATH}"
         )
     endif()
@@ -194,7 +208,7 @@ if(AGENT_CPP_BUILD_EXAMPLES)
         ${LLAMA_SOURCE_DIR}/include
         ${LLAMA_SOURCE_DIR}/vendor
     )
-    target_link_libraries(shell-example PRIVATE agent model common llama)
+    target_link_libraries(shell-example PRIVATE agent model llama-common llama)
     target_compile_features(shell-example PRIVATE cxx_std_17)
 
     # Memory example
@@ -207,7 +221,7 @@ if(AGENT_CPP_BUILD_EXAMPLES)
         ${LLAMA_SOURCE_DIR}/include
         ${LLAMA_SOURCE_DIR}/vendor
     )
-    target_link_libraries(memory-example PRIVATE agent model common llama)
+    target_link_libraries(memory-example PRIVATE agent model llama-common llama)
     target_compile_features(memory-example PRIVATE cxx_std_17)
 
     # Multi-agent example
@@ -220,7 +234,7 @@ if(AGENT_CPP_BUILD_EXAMPLES)
         ${LLAMA_SOURCE_DIR}/include
         ${LLAMA_SOURCE_DIR}/vendor
     )
-    target_link_libraries(multi-agent-example PRIVATE agent model common llama)
+    target_link_libraries(multi-agent-example PRIVATE agent model llama-common llama)
     target_compile_features(multi-agent-example PRIVATE cxx_std_17)
 
     # Context engineering example
@@ -233,7 +247,7 @@ if(AGENT_CPP_BUILD_EXAMPLES)
         ${LLAMA_SOURCE_DIR}/include
         ${LLAMA_SOURCE_DIR}/vendor
     )
-    target_link_libraries(context-engineering-example PRIVATE agent model common llama)
+    target_link_libraries(context-engineering-example PRIVATE agent model llama-common llama)
     target_compile_features(context-engineering-example PRIVATE cxx_std_17)
 
     # Grammar example
@@ -246,8 +260,21 @@ if(AGENT_CPP_BUILD_EXAMPLES)
         ${LLAMA_SOURCE_DIR}/include
         ${LLAMA_SOURCE_DIR}/vendor
     )
-    target_link_libraries(grammar-example PRIVATE agent model common llama)
+    target_link_libraries(grammar-example PRIVATE agent model llama-common llama)
     target_compile_features(grammar-example PRIVATE cxx_std_17)
+
+    # LoRA adapter example
+    add_executable(lora-example examples/lora/lora.cpp)
+    target_include_directories(lora-example PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/src
+        ${CMAKE_CURRENT_SOURCE_DIR}/examples/shared
+        ${LLAMA_SOURCE_DIR}/common
+        ${LLAMA_SOURCE_DIR}/ggml/include
+        ${LLAMA_SOURCE_DIR}/include
+        ${LLAMA_SOURCE_DIR}/vendor
+    )
+    target_link_libraries(lora-example PRIVATE agent model llama-common llama)
+    target_compile_features(lora-example PRIVATE cxx_std_17)
 
     # MCP client example (requires MCP support)
     if(AGENT_CPP_BUILD_MCP)
@@ -260,7 +287,7 @@ if(AGENT_CPP_BUILD_EXAMPLES)
             ${LLAMA_SOURCE_DIR}/include
             ${LLAMA_SOURCE_DIR}/vendor
         )
-        target_link_libraries(mcp-example PRIVATE agent model mcp_client common llama)
+        target_link_libraries(mcp-example PRIVATE agent model mcp_client llama-common llama)
         target_compile_features(mcp-example PRIVATE cxx_std_17)
     endif()
 
@@ -294,47 +321,60 @@ if(AGENT_CPP_INSTALL)
         DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/agent-cpp
     )
 
-    # Install libraries with export set
+    # Install libraries. When using the bundled llama.cpp submodule, we cannot
+    # export the llama targets as part of agent-cpp because they are internal build
+    # targets (llama-common/ggml) and would require exporting a transitive graph
+    # that is not installable as a standalone package.
     set(INSTALL_TARGETS agent model)
     if(AGENT_CPP_BUILD_MCP)
         list(APPEND INSTALL_TARGETS mcp_client)
     endif()
 
-    install(TARGETS ${INSTALL_TARGETS}
-        EXPORT agent-cpp-targets
-        LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
-        ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
-        RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
-        INCLUDES DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
-    )
+    if(AGENT_CPP_BUNDLED_LLAMA)
+        install(TARGETS ${INSTALL_TARGETS}
+            LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+            ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+            RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+            INCLUDES DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
+        )
+        message(STATUS "Bundled llama.cpp detected: installing agent-cpp libraries without generating an export package because llama targets are not standalone installable dependencies.")
+    else()
+        install(TARGETS ${INSTALL_TARGETS}
+            EXPORT agent-cpp-targets
+            LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+            ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+            RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+            INCLUDES DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
+        )
 
-    # Generate and install the export targets file
-    install(EXPORT agent-cpp-targets
-        FILE agent-cpp-targets.cmake
-        NAMESPACE agent-cpp::
-        DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/agent-cpp
-    )
+        # Generate and install the export targets file
+        install(EXPORT agent-cpp-targets
+            FILE agent-cpp-targets.cmake
+            NAMESPACE agent-cpp::
+            DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/agent-cpp
+        )
 
-    # Generate the version file for find_package version checking
-    write_basic_package_version_file(
-        "${CMAKE_CURRENT_BINARY_DIR}/agent-cpp-config-version.cmake"
-        VERSION ${PROJECT_VERSION}
-        COMPATIBILITY SameMajorVersion
-    )
+        # Generate the version file for find_package version checking
+        write_basic_package_version_file(
+            "${CMAKE_CURRENT_BINARY_DIR}/agent-cpp-config-version.cmake"
+            VERSION ${PROJECT_VERSION}
+            COMPATIBILITY SameMajorVersion
+        )
 
-    # Generate the config file from template
-    configure_package_config_file(
-        "${CMAKE_CURRENT_SOURCE_DIR}/cmake/agent-cpp-config.cmake.in"
-        "${CMAKE_CURRENT_BINARY_DIR}/agent-cpp-config.cmake"
-        INSTALL_DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/agent-cpp
-    )
+        # Generate the config file from template
+        configure_package_config_file(
+            "${CMAKE_CURRENT_SOURCE_DIR}/cmake/agent-cpp-config.cmake.in"
+            "${CMAKE_CURRENT_BINARY_DIR}/agent-cpp-config.cmake"
+            INSTALL_DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/agent-cpp
+        )
 
-    # Install the CMake config files
-    install(FILES
-        "${CMAKE_CURRENT_BINARY_DIR}/agent-cpp-config.cmake"
-        "${CMAKE_CURRENT_BINARY_DIR}/agent-cpp-config-version.cmake"
-        DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/agent-cpp
-    )
+        # Install the CMake config files
+        install(FILES
+            "${CMAKE_CURRENT_BINARY_DIR}/agent-cpp-config.cmake"
+            "${CMAKE_CURRENT_BINARY_DIR}/agent-cpp-config-version.cmake"
+            DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/agent-cpp
+        )
+    endif()
 
     message(STATUS "Install target enabled. Install with: cmake --install build --prefix /your/path")
 endif()

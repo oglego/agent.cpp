@@ -20,7 +20,7 @@ target_include_directories(mcp-example PRIVATE
     ${LLAMA_SOURCE_DIR}/vendor
 )
 
-target_link_libraries(mcp-example PRIVATE agent mcp_client common llama)
+target_link_libraries(mcp-example PRIVATE agent mcp_client llama-common llama)
 target_compile_features(mcp-example PRIVATE cxx_std_17)
 
 message(STATUS "MCP example configured.")
