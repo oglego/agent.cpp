@@ -1,12 +1,103 @@
 #include "model.h"
 #include "chat.h"
 #include "error.h"
+#include "tool.h"
 #include <algorithm>
 #include <cstdio>
 #include <fstream>
 #include <sstream>
 
 namespace agent_cpp {
+
+namespace {
+
+// Fallback parser for models whose actual tool-call output doesn't match
+// the grammar built from their chat template (e.g. observed with
+// granite-4.0-micro: the model emits Hermes-style
+// <tool_call>{...}</tool_call> tags, but the template-derived PEG grammar
+// doesn't recognize them - a mismatch we've traced to llama.cpp's
+// chat-template autoparser, not something fixable from here). Extracts
+// every <tool_call>...</tool_call> block and parses each JSON body
+// directly. A malformed individual block is skipped rather than aborting
+// the whole extraction; returns true if at least one call was recovered.
+bool
+parse_tool_call_xml_fallback(const std::string& raw, common_chat_msg& parsed_msg)
+{
+    parsed_msg = {};
+    parsed_msg.role = "assistant";
+
+    const std::string open_tag = "<tool_call";
+    const std::string close_tag = "</tool_call>";
+
+    const auto trim = [](std::string s) {
+        const auto is_ws = [](unsigned char ch) {
+            return ch == ' ' || ch == '\n' || ch == '\r' || ch == '\t';
+        };
+        while (!s.empty() && is_ws(static_cast<unsigned char>(s.front()))) {
+            s.erase(s.begin());
+        }
+        while (!s.empty() && is_ws(static_cast<unsigned char>(s.back()))) {
+            s.pop_back();
+        }
+        return s;
+    };
+
+    std::string::size_type search_pos = 0;
+    while (true) {
+        const std::string::size_type start = raw.find(open_tag, search_pos);
+        if (start == std::string::npos) {
+            break;
+        }
+
+        const std::string::size_type end = raw.find(close_tag, start);
+        if (end == std::string::npos) {
+            // Unterminated tag - nothing more to recover after this point.
+            break;
+        }
+
+        std::string body = raw.substr(start, end - start + close_tag.size());
+        search_pos = end + close_tag.size();
+
+        const std::string::size_type gt = body.find('>');
+        if (gt == std::string::npos) {
+            continue;
+        }
+        body = trim(body.substr(gt + 1));
+
+        const std::string::size_type first_json = body.find('{');
+        const std::string::size_type last_json = body.rfind('}');
+        if (first_json == std::string::npos ||
+            last_json == std::string::npos || last_json < first_json) {
+            continue;
+        }
+
+        const std::string candidate =
+          body.substr(first_json, last_json - first_json + 1);
+        try {
+            const json j = json::parse(candidate);
+            if (!j.is_object()) {
+                continue;
+            }
+
+            const std::string name = j.value("name", "");
+            if (name.empty()) {
+                continue;
+            }
+
+            common_chat_tool_call call;
+            call.name = name;
+            call.arguments =
+              j.contains("arguments") ? j.at("arguments").dump() : "{}";
+            parsed_msg.tool_calls.push_back(call);
+        } catch (const std::exception&) {
+            continue;
+        }
+    }
+
+    return !parsed_msg.tool_calls.empty();
+}
+
+} // namespace
 
 std::string
 load_grammar_file(const std::string& grammar_path)
@@ -27,7 +118,8 @@ load_grammar_file(const std::string& grammar_path)
 }
 
 std::shared_ptr<ModelWeights>
-ModelWeights::create(const std::string& model_path)
+ModelWeights::create(const std::string& model_path,
+                     const std::string& chat_template_override)
 {
     std::shared_ptr<ModelWeights> weights(new ModelWeights());
 
@@ -41,7 +133,7 @@ ModelWeights::create(const std::string& model_path)
     }
 
     auto tmpls = common_chat_templates_init(weights->model_,
-                                            /* chat_template_override */ "");
+                                            chat_template_override);
     if (!tmpls) {
         throw ModelError("failed to initialize chat templates");
     }
@@ -61,7 +153,8 @@ ModelWeights::~ModelWeights()
 std::shared_ptr<Model>
 Model::create(const std::string& model_path, const ModelConfig& model_config)
 {
-    auto weights = ModelWeights::create(model_path);
+    auto weights =
+      ModelWeights::create(model_path, model_config.chat_template_override);
     return create_with_weights(std::move(weights), model_config);
 }
 
@@ -230,8 +323,43 @@ Model::generate(const std::vector<common_chat_msg>& messages,
     // Use explicitly configured format, or fall back to auto-detected format
     syntax.format = config_.chat_format.value_or(params.format);
     syntax.parse_tool_calls = true;
+    // Load the template-specific PEG grammar; without this, PEG-based
+    // formats silently fall back to parsing everything as plain content.
+    syntax.parser.load(params.parser);
 
-    auto parsed_msg = common_chat_parse(response, false, syntax);
+    common_chat_msg parsed_msg;
+    try {
+        parsed_msg = common_chat_parse(response, false, syntax);
+    } catch (const std::exception& e) {
+        if (parse_tool_call_xml_fallback(response, parsed_msg)) {
+            return parsed_msg;
+        }
+        if (response.find("<tool_call") == std::string::npos) {
+            // No tool call present at all - the template-derived grammar
+            // rejected this as unparseable even though it's just plain
+            // content (observed with granite-4.0-micro's broken native
+            // grammar). Treat the raw response as the final answer rather
+            // than failing on ordinary conversational replies.
+            parsed_msg = {};
+            parsed_msg.role = "assistant";
+            parsed_msg.content = response;
+            return parsed_msg;
+        }
+        throw ModelError(std::string("failed to parse model output: ") +
+                          e.what());
+    }
+
+    // Some models' output is accepted by the template-derived parser as
+    // plain content (no exception) even though it contains a real tool
+    // call the parser failed to recognize. Recover it if so, without
+    // discarding the original result if recovery fails.
+    if (parsed_msg.tool_calls.empty() &&
+        response.find("<tool_call") != std::string::npos) {
+        common_chat_msg recovered;
+        if (parse_tool_call_xml_fallback(response, recovered)) {
+            parsed_msg = recovered;
+        }
+    }
     parsed_msg.role = "assistant";
 
     return parsed_msg;

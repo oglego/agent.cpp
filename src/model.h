@@ -36,6 +36,8 @@ struct ModelConfig
     // Optional GBNF grammar and root rule name
     std::string grammar;
     std::string grammar_root = "root";
+    // Optional Jinja chat template to use
+    std::string chat_template_override;
 };
 
 /// Reads a GBNF file into a string for ModelConfig::grammar
@@ -60,9 +62,12 @@ class ModelWeights
   public:
     /// @brief Load model weights from a GGUF file
     /// @param model_path Path to the GGUF model file
+    /// @param chat_template_override Optional Jinja template to use 
     /// @return Shared pointer to the loaded weights
     /// @throws agent_cpp::ModelError if loading fails
-    static std::shared_ptr<ModelWeights> create(const std::string& model_path);
+    static std::shared_ptr<ModelWeights> create(
+      const std::string& model_path,
+      const std::string& chat_template_override = "");
 
     ~ModelWeights();
 

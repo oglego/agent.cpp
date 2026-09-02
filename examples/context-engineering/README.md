@@ -49,6 +49,9 @@ cmake --build build -j$(nproc)
 
 # Custom limit: keep 3 most recent tool calls
 ./build/context-engineering-example -m "path-to-model.gguf" -n 3
+
+# Override the model's built-in chat template with a custom one
+./build/context-engineering-example -m "path-to-model.gguf" -t "path-to-template.jinja"
 ```
 
 ## Example

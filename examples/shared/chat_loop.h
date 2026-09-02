@@ -2,6 +2,7 @@
 
 #include "agent.h"
 #include "chat.h"
+#include "error.h"
 #include "platform_compat.h"
 #include <cstdio>
 #include <iostream>
@@ -35,14 +36,20 @@ run_chat_loop(agent_cpp::Agent& agent)
         user_msg.content = user_input;
         messages.push_back(user_msg);
 
-        agent.run_loop(messages, [](const std::string& chunk) {
-            if (isatty(fileno(stdout))) {
-                printf("\033[33m%s\033[0m", chunk.c_str());
-            } else {
-                printf("%s", chunk.c_str());
-            }
-            fflush(stdout);
-        });
+        try {
+            agent.run_loop(messages, [](const std::string& chunk) {
+                if (isatty(fileno(stdout))) {
+                    printf("\033[33m%s\033[0m", chunk.c_str());
+                } else {
+                    printf("%s", chunk.c_str());
+                }
+                fflush(stdout);
+            });
+        } catch (const agent_cpp::Error& e) {
+            printf("\n[error] %s\n", e.what());
+        } catch (const std::exception& e) {
+            printf("\n[error] unexpected error: %s\n", e.what());
+        }
         printf("\n");
     }
 
