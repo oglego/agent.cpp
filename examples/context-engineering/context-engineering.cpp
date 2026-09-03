@@ -126,6 +126,7 @@ print_usage(int /*unused*/, char** argv)
     printf(
       "  -n <number>     Maximum recent tool calls to keep (default: %zu)\n",
       DEFAULT_MAX_TOOL_CALLS);
+    printf("  -t <path>       Optional chat template (.jinja) to use\n");
     printf("\n");
 }
 
@@ -133,6 +134,7 @@ int
 main(int argc, char** argv)
 {
     std::string model_path;
+    std::string chat_template_path;
     size_t max_tool_calls = DEFAULT_MAX_TOOL_CALLS;
 
     for (int i = 1; i < argc; i++) {
@@ -151,6 +153,13 @@ main(int argc, char** argv)
                         fprintf(stderr, "error: -n must be at least 1\n");
                         return 1;
                     }
+                } else {
+                    print_usage(argc, argv);
+                    return 1;
+                }
+            } else if (strcmp(argv[i], "-t") == 0) {
+                if (i + 1 < argc) {
+                    chat_template_path = argv[++i];
                 } else {
                     print_usage(argc, argv);
                     return 1;
@@ -176,6 +185,15 @@ main(int argc, char** argv)
     auto model_config = agent_cpp::ModelConfig{};
     model_config.n_ctx = 10240;
     model_config.temp = 0.0F;
+    if (!chat_template_path.empty()) {
+        try {
+            model_config.chat_template_override =
+              agent_cpp::load_grammar_file(chat_template_path);
+        } catch (const agent_cpp::ModelError& e) {
+            fprintf(stderr, "error: %s\n", e.what());
+            return 1;
+        }
+    }
     try {
         model = agent_cpp::Model::create(model_path, model_config);
     } catch (const agent_cpp::ModelError& e) {

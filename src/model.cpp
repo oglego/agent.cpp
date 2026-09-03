@@ -27,7 +27,7 @@ load_grammar_file(const std::string& grammar_path)
 }
 
 std::shared_ptr<ModelWeights>
-ModelWeights::create(const std::string& model_path)
+ModelWeights::create(const std::string& model_path, const std::string& chat_template_override)
 {
     std::shared_ptr<ModelWeights> weights(new ModelWeights());
 
@@ -41,7 +41,7 @@ ModelWeights::create(const std::string& model_path)
     }
 
     auto tmpls = common_chat_templates_init(weights->model_,
-                                            /* chat_template_override */ "");
+                                            /* chat_template_override */ chat_template_override.c_str());
     if (!tmpls) {
         throw ModelError("failed to initialize chat templates");
     }
@@ -61,7 +61,7 @@ ModelWeights::~ModelWeights()
 std::shared_ptr<Model>
 Model::create(const std::string& model_path, const ModelConfig& model_config)
 {
-    auto weights = ModelWeights::create(model_path);
+    auto weights = ModelWeights::create(model_path, model_config.chat_template_override);
     return create_with_weights(std::move(weights), model_config);
 }
 
@@ -229,6 +229,8 @@ Model::generate(const std::vector<common_chat_msg>& messages,
     common_chat_parser_params syntax;
     // Use explicitly configured format, or fall back to auto-detected format
     syntax.format = config_.chat_format.value_or(params.format);
+    syntax.parser.load(params.parser);
+    syntax.generation_prompt = params.generation_prompt;
     syntax.parse_tool_calls = true;
 
     auto parsed_msg = common_chat_parse(response, false, syntax);
