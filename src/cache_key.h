@@ -29,8 +29,10 @@ struct CacheKeyInputs
     {
         std::string path;
         float scale = 1.0F;
+        std::string file_identity;
     };
 
+    std::string model_identity;
     int n_ctx = 0;
     int cache_type_k = 0;
     int cache_type_v = 0;
@@ -43,7 +45,7 @@ struct CacheKeyInputs
 class CacheKey
 {
   public:
-    static constexpr const char* FORMAT_VERSION = "1";
+    static constexpr const char* FORMAT_VERSION = "2";
 
     /// Build the key. Adapters are LoRA deltas that add, so their order does
     /// not matter; entries are sorted to make the key order-independent.
@@ -52,6 +54,7 @@ class CacheKey
     {
         CacheKey key;
         key.fields_["format"] = FORMAT_VERSION;
+        key.fields_["model"] = in.model_identity;
         key.fields_["n_ctx"] = std::to_string(in.n_ctx);
         key.fields_["cache_type_k"] = std::to_string(in.cache_type_k);
         key.fields_["cache_type_v"] = std::to_string(in.cache_type_v);
@@ -61,7 +64,8 @@ class CacheKey
             if (lora.scale == 0.0F) {
                 continue;
             }
-            adapters.push_back(describe_adapter(lora.path, lora.scale));
+            adapters.push_back(describe_adapter(
+              lora.path, lora.scale, lora.file_identity));
         }
         std::sort(adapters.begin(), adapters.end());
 
@@ -182,21 +186,9 @@ class CacheKey
         return fields_;
     }
 
-  private:
-    static uint64_t fnv1a(const std::string& s)
-    {
-        uint64_t h = 1469598103934665603ULL;
-        for (unsigned char c : s) {
-            h ^= c;
-            h *= 1099511628211ULL;
-        }
-        return h;
-    }
-
-    // "<hash of path|size|mtime>@<scale>". Path is canonicalised so relative
-    // and absolute spellings of the same file agree. Size + mtime catch an
-    // adapter that was retrained in place without hashing its contents.
-    static std::string describe_adapter(const std::string& path, float scale)
+    /// Capture a file's path, size, and modification time for stable cache
+    /// identity. Call this when the file is loaded, then retain the result.
+    static std::string file_identity(const std::string& path)
     {
         std::error_code ec;
         std::filesystem::path canon =
@@ -213,14 +205,38 @@ class CacheKey
         if (size_ec || time_ec) {
             ident << "unreadable";
         } else {
-            ident << size << '|' << mtime.time_since_epoch().count();
+            ident << size << '|'
+                  << static_cast<std::int64_t>(
+                       mtime.time_since_epoch().count());
         }
+        return ident.str();
+    }
+
+  private:
+    static uint64_t fnv1a(const std::string& s)
+    {
+        uint64_t h = 1469598103934665603ULL;
+        for (unsigned char c : s) {
+            h ^= c;
+            h *= 1099511628211ULL;
+        }
+        return h;
+    }
+
+    // "<hash of file identity>@<scale>". The identity is captured when the
+    // adapter is loaded so later file changes cannot relabel the loaded state.
+    static std::string describe_adapter(const std::string& path,
+                                        float scale,
+                                        const std::string& file_identity)
+    {
+        const std::string identity =
+          file_identity.empty() ? CacheKey::file_identity(path) : file_identity;
 
         char buf[64];
         std::snprintf(buf,
                       sizeof(buf),
                       "%016llx@%.9g",
-                      static_cast<unsigned long long>(fnv1a(ident.str())),
+                      static_cast<unsigned long long>(fnv1a(identity)),
                       static_cast<double>(scale));
         return buf;
     }

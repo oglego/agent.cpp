@@ -13,14 +13,19 @@ namespace {
 
 // Everything that makes a saved KV cache reusable by this Model.
 CacheKey
-make_cache_key(const ModelConfig& config)
+make_cache_key(const ModelConfig& config,
+               const std::string& model_identity,
+               const std::vector<std::string>& lora_identities)
 {
     CacheKeyInputs in;
+    in.model_identity = model_identity;
     in.n_ctx = config.n_ctx;
     in.cache_type_k = static_cast<int>(config.cache_type_k);
     in.cache_type_v = static_cast<int>(config.cache_type_v);
-    for (const LoraAdapterConfig& lora : config.loras) {
-        in.loras.push_back({ lora.path, lora.scale });
+    for (size_t i = 0; i < config.loras.size(); ++i) {
+        const LoraAdapterConfig& lora = config.loras[i];
+        in.loras.push_back(
+          { lora.path, lora.scale, lora_identities.at(i) });
     }
     return CacheKey::from_inputs(in);
 }
@@ -52,6 +57,7 @@ ModelWeights::create(const std::string& model_path)
 
     ggml_backend_load_all();
 
+    weights->model_identity_ = CacheKey::file_identity(model_path);
     llama_model_params model_params = llama_model_default_params();
     weights->model_ =
       llama_model_load_from_file(model_path.c_str(), model_params);
@@ -114,6 +120,7 @@ Model::Model(Model&& other) noexcept
   , sampler_(other.sampler_)
   , grammar_sampler_(other.grammar_sampler_)
   , loras_(std::move(other.loras_))
+  , lora_identities_(std::move(other.lora_identities_))
   , processed_tokens_(std::move(other.processed_tokens_))
   , n_past_(other.n_past_)
   , config_(other.config_)
@@ -143,6 +150,7 @@ Model::operator=(Model&& other) noexcept
         sampler_ = other.sampler_;
         grammar_sampler_ = other.grammar_sampler_;
         loras_ = std::move(other.loras_);
+        lora_identities_ = std::move(other.lora_identities_);
         processed_tokens_ = std::move(other.processed_tokens_);
         n_past_ = other.n_past_;
         config_ = other.config_;
@@ -177,6 +185,8 @@ Model::initialize_context(const ModelConfig& model_config)
         std::vector<float> scales;
         scales.reserve(model_config.loras.size());
         for (const LoraAdapterConfig& lora_config : model_config.loras) {
+            lora_identities_.push_back(
+              CacheKey::file_identity(lora_config.path));
             llama_adapter_lora* lora = llama_adapter_lora_init(
               weights_->get_model(), lora_config.path.c_str());
             if (lora == nullptr) {
@@ -446,7 +456,10 @@ Model::save_cache(const std::string& cache_path)
         return false;
     }
 
-    if (!make_cache_key(config_).write(cache_path)) {
+    if (!make_cache_key(config_,
+                        weights_->get_model_identity(),
+                        lora_identities_)
+           .write(cache_path)) {
         fprintf(stderr,
                 "warning: failed to write cache metadata '%s'; the cache will "
                 "be rejected on next load\n",
@@ -470,7 +483,11 @@ Model::load_cache(const std::string& cache_path)
                     cache_path.c_str());
             return {};
         }
-        const std::string reason = make_cache_key(config_).mismatch(stored);
+        const std::string reason =
+          make_cache_key(config_,
+                         weights_->get_model_identity(),
+                         lora_identities_)
+            .mismatch(stored);
         if (!reason.empty()) {
             fprintf(stderr,
                     "warning: ignoring prompt cache '%s': %s (cache will be "

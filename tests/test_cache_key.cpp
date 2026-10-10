@@ -84,6 +84,18 @@ TEST(test_different_adapter_file_mismatch)
                    .empty());
 }
 
+TEST(test_different_base_model_mismatch)
+{
+    auto first = base_inputs();
+    auto second = base_inputs();
+    first.model_identity = "model-a";
+    second.model_identity = "model-b";
+
+    ASSERT_TRUE(CacheKey::from_inputs(first)
+                  .mismatch(CacheKey::from_inputs(second))
+                  .find("model") != std::string::npos);
+}
+
 TEST(test_scale_change_mismatch)
 {
     TempDir dir;
@@ -109,6 +121,22 @@ TEST(test_adapter_modified_in_place_mismatch)
     dir.file("a.gguf", "adapter-a-retrained-longer"); // size changes
 
     ASSERT_FALSE(CacheKey::from_inputs(in).mismatch(before).empty());
+}
+
+TEST(test_adapter_identity_is_a_load_time_snapshot)
+{
+    TempDir dir;
+    auto a = dir.file("a.gguf", "adapter-a");
+    auto loaded = base_inputs();
+    loaded.loras.push_back({ a, 1.0F, CacheKey::file_identity(a) });
+    auto before = CacheKey::from_inputs(loaded);
+
+    dir.file("a.gguf", "adapter-replaced-after-load");
+    ASSERT_EQ(CacheKey::from_inputs(loaded).mismatch(before), std::string());
+
+    auto reloaded = base_inputs();
+    reloaded.loras.push_back({ a, 1.0F, CacheKey::file_identity(a) });
+    ASSERT_FALSE(CacheKey::from_inputs(reloaded).mismatch(before).empty());
 }
 
 TEST(test_adapter_order_does_not_matter)
@@ -230,8 +258,10 @@ main()
         RUN_TEST(test_identical_inputs_match);
         RUN_TEST(test_no_adapters_vs_adapter_mismatch);
         RUN_TEST(test_different_adapter_file_mismatch);
+        RUN_TEST(test_different_base_model_mismatch);
         RUN_TEST(test_scale_change_mismatch);
         RUN_TEST(test_adapter_modified_in_place_mismatch);
+        RUN_TEST(test_adapter_identity_is_a_load_time_snapshot);
         RUN_TEST(test_adapter_order_does_not_matter);
         RUN_TEST(test_zero_scale_adapter_ignored);
         RUN_TEST(test_relative_and_absolute_path_agree);
