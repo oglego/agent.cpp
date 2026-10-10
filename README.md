@@ -104,7 +104,7 @@ auto model = Model::create_with_weights(shared_weights, config);
 Multiple adapters may be stacked by adding more entries; each is scaled independently. See the [LoRA example](./examples/lora/README.md) for instructions on converting adapters from common training formats to GGUF.
 
 > [!NOTE]
-> Prompt cache files do not record which adapters were active when they were created. If you use `load_or_create_cache`, use a separate cache file for each adapter setup (paths and scales), or delete the cache after changing adapters; otherwise the stale cache is silently reused.
+> Prompt caches written by `load_or_create_cache` get a small `<cache>.meta` sidecar recording the LoRA adapters (path, size, modification time, scale), `n_ctx`, and KV cache types. On load, a cache whose sidecar is missing or doesn't match the current configuration is ignored with a warning and rebuilt, so changing adapters no longer silently reuses a stale cache. Adapters are identified by file metadata, not content: an adapter replaced in place with identical size and modification time won't be detected. Keep the `.meta` file alongside the cache if you move it.
 
 ## Tools
 

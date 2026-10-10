@@ -1,4 +1,5 @@
 #include "model.h"
+#include "cache_key.h"
 #include "chat.h"
 #include "error.h"
 #include <algorithm>
@@ -7,6 +8,24 @@
 #include <sstream>
 
 namespace agent_cpp {
+
+namespace {
+
+// Everything that makes a saved KV cache reusable by this Model.
+CacheKey
+make_cache_key(const ModelConfig& config)
+{
+    CacheKeyInputs in;
+    in.n_ctx = config.n_ctx;
+    in.cache_type_k = static_cast<int>(config.cache_type_k);
+    in.cache_type_v = static_cast<int>(config.cache_type_v);
+    for (const LoraAdapterConfig& lora : config.loras) {
+        in.loras.push_back({ lora.path, lora.scale });
+    }
+    return CacheKey::from_inputs(in);
+}
+
+} // namespace
 
 std::string
 load_grammar_file(const std::string& grammar_path)
@@ -416,15 +435,52 @@ Model::generate_from_tokens(const std::vector<llama_token>& all_tokens,
 bool
 Model::save_cache(const std::string& cache_path)
 {
-    return llama_state_save_file(ctx_,
-                                 cache_path.c_str(),
-                                 processed_tokens_.data(),
-                                 processed_tokens_.size());
+    // Drop any old sidecar first: if we crash between the state save and the
+    // sidecar write, the cache has no metadata and is rejected on load.
+    CacheKey::remove(cache_path);
+
+    if (!llama_state_save_file(ctx_,
+                               cache_path.c_str(),
+                               processed_tokens_.data(),
+                               processed_tokens_.size())) {
+        return false;
+    }
+
+    if (!make_cache_key(config_).write(cache_path)) {
+        fprintf(stderr,
+                "warning: failed to write cache metadata '%s'; the cache will "
+                "be rejected on next load\n",
+                CacheKey::sidecar_path(cache_path).c_str());
+        return false;
+    }
+    return true;
 }
 
 std::vector<llama_token>
 Model::load_cache(const std::string& cache_path)
 {
+    // Reject caches built under different settings (e.g. other LoRA adapters)
+    // before touching the context: the KV state would not match this model.
+    {
+        CacheKey stored;
+        if (!CacheKey::read(cache_path, stored)) {
+            fprintf(stderr,
+                    "warning: ignoring prompt cache '%s': missing or invalid "
+                    "metadata file (cache will be rebuilt)\n",
+                    cache_path.c_str());
+            return {};
+        }
+        const std::string reason = make_cache_key(config_).mismatch(stored);
+        if (!reason.empty()) {
+            fprintf(stderr,
+                    "warning: ignoring prompt cache '%s': %s (cache will be "
+                    "rebuilt)\n",
+                    cache_path.c_str(),
+                    reason.c_str());
+            return {};
+        }
+    }
+
     // Start with a reasonable capacity, will be resized based on actual count
     std::vector<llama_token> tokens(llama_n_ctx(ctx_));
     size_t n_token_count_out = 0;

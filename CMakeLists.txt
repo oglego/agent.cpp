@@ -166,6 +166,10 @@ if(AGENT_CPP_BUILD_TESTS)
     target_link_libraries(test_lora PRIVATE model ${LLAMA_COMMON_TARGET} llama)
     target_compile_features(test_lora PRIVATE cxx_std_17)
 
+    add_executable(test_cache_key tests/test_cache_key.cpp)
+    target_include_directories(test_cache_key PRIVATE src tests)
+    target_compile_features(test_cache_key PRIVATE cxx_std_17)
+
     add_executable(test_callbacks tests/test_callbacks.cpp)
     target_include_directories(test_callbacks PRIVATE
         src
@@ -197,6 +201,7 @@ if(AGENT_CPP_BUILD_TESTS)
     add_test(NAME ToolTests COMMAND test_tool)
     add_test(NAME CallbacksTests COMMAND test_callbacks)
     add_test(NAME GrammarTests COMMAND test_grammar)
+    add_test(NAME CacheKeyTests COMMAND test_cache_key)
     add_test(NAME LoraTests COMMAND test_lora)
     add_test(NAME ChatParserTests COMMAND test_chat_parser)
 
