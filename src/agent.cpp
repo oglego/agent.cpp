@@ -181,14 +181,13 @@ Agent::load_or_create_cache(const std::string& cache_path)
         return false;
     }
 
-    if (std::filesystem::exists(cache_path)) {
-        auto cached_tokens = model->load_cache(cache_path);
-        if (!cached_tokens.empty()) {
-            printf("Loaded prompt cache from '%s' (%zu tokens)\n",
-                   cache_path.c_str(),
-                   cached_tokens.size());
-            return true;
-        }
+    const std::string cache_file = model->cache_file(cache_path);
+    auto cached_tokens = model->load_cache(cache_path);
+    if (!cached_tokens.empty()) {
+        printf("Loaded prompt cache from '%s' (%zu tokens)\n",
+               cache_file.c_str(),
+               cached_tokens.size());
+        return true;
     }
 
     auto prompt_tokens = build_prompt_tokens();
@@ -197,7 +196,7 @@ Agent::load_or_create_cache(const std::string& cache_path)
     }
 
     printf("Creating prompt cache at '%s' (%zu tokens)\n",
-           cache_path.c_str(),
+           cache_file.c_str(),
            prompt_tokens.size());
 
     // warms the KV cache

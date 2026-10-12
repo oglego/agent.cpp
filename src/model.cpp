@@ -1,8 +1,11 @@
 #include "model.h"
+#include "cache_key.h"
 #include "chat.h"
 #include "error.h"
 #include <algorithm>
+#include <chrono>
 #include <cstdio>
+#include <filesystem>
 #include <fstream>
 #include <sstream>
 
@@ -33,12 +36,19 @@ ModelWeights::create(const std::string& model_path)
 
     ggml_backend_load_all();
 
+    // Identify before loading so a file replaced mid-load can only cause a miss
+    const auto identity = file_identity(model_path);
+
     llama_model_params model_params = llama_model_default_params();
     weights->model_ =
       llama_model_load_from_file(model_path.c_str(), model_params);
     if (weights->model_ == nullptr) {
         throw ModelError("unable to load model from '" + model_path + "'");
     }
+    if (!identity) {
+        throw ModelError("unable to stat model file '" + model_path + "'");
+    }
+    weights->identity_ = *identity;
 
     auto tmpls = common_chat_templates_init(weights->model_,
                                             /* chat_template_override */ "");
@@ -95,6 +105,7 @@ Model::Model(Model&& other) noexcept
   , sampler_(other.sampler_)
   , grammar_sampler_(other.grammar_sampler_)
   , loras_(std::move(other.loras_))
+  , cache_digest_(other.cache_digest_)
   , processed_tokens_(std::move(other.processed_tokens_))
   , n_past_(other.n_past_)
   , config_(other.config_)
@@ -124,6 +135,7 @@ Model::operator=(Model&& other) noexcept
         sampler_ = other.sampler_;
         grammar_sampler_ = other.grammar_sampler_;
         loras_ = std::move(other.loras_);
+        cache_digest_ = other.cache_digest_;
         processed_tokens_ = std::move(other.processed_tokens_);
         n_past_ = other.n_past_;
         config_ = other.config_;
@@ -154,10 +166,18 @@ Model::initialize_context(const ModelConfig& model_config)
         throw ModelError("failed to create llama context");
     }
 
+    std::vector<std::pair<uint64_t, float>> adapters;
     if (!model_config.loras.empty()) {
         std::vector<float> scales;
         scales.reserve(model_config.loras.size());
         for (const LoraAdapterConfig& lora_config : model_config.loras) {
+            // Hash before loading so a file replaced mid-load only causes a miss
+            const auto hash = hash_file(lora_config.path);
+            if (!hash) {
+                throw ModelError("failed to read LoRA adapter '" +
+                                 lora_config.path + "'");
+            }
+            adapters.emplace_back(*hash, lora_config.scale);
             llama_adapter_lora* lora = llama_adapter_lora_init(
               weights_->get_model(), lora_config.path.c_str());
             if (lora == nullptr) {
@@ -172,6 +192,13 @@ Model::initialize_context(const ModelConfig& model_config)
             throw ModelError("failed to apply LoRA adapters to context");
         }
     }
+    cache_digest_ = cache_digest(
+      weights_->identity(),
+      std::move(adapters),
+      { model_config.n_ctx,
+        static_cast<int>(model_config.cache_type_k),
+        static_cast<int>(model_config.cache_type_v),
+        LLAMA_SESSION_VERSION });
 
     sampler_ = llama_sampler_chain_init(llama_sampler_chain_default_params());
 
@@ -413,24 +440,51 @@ Model::generate_from_tokens(const std::vector<llama_token>& all_tokens,
     return response;
 }
 
-bool
-Model::save_cache(const std::string& cache_path)
+std::string
+Model::cache_file(const std::string& base_path) const
 {
-    return llama_state_save_file(ctx_,
-                                 cache_path.c_str(),
-                                 processed_tokens_.data(),
-                                 processed_tokens_.size());
+    return keyed_cache_path(base_path, cache_digest_).string();
+}
+
+bool
+Model::save_cache(const std::string& base_path)
+{
+    const std::filesystem::path final_path = cache_file(base_path);
+    std::filesystem::path tmp_path = final_path;
+    tmp_path +=
+      ".tmp." +
+      std::to_string(std::chrono::steady_clock::now().time_since_epoch().count());
+
+    std::error_code ec;
+    if (!llama_state_save_file(ctx_,
+                               tmp_path.string().c_str(),
+                               processed_tokens_.data(),
+                               processed_tokens_.size())) {
+        std::filesystem::remove(tmp_path, ec);
+        return false;
+    }
+    std::filesystem::rename(tmp_path, final_path, ec);
+    if (ec) {
+        std::filesystem::remove(tmp_path, ec);
+        return false;
+    }
+    return true;
 }
 
 std::vector<llama_token>
-Model::load_cache(const std::string& cache_path)
+Model::load_cache(const std::string& base_path)
 {
+    const std::string path = cache_file(base_path);
+    if (!std::filesystem::exists(path)) {
+        return {};
+    }
+
     // Start with a reasonable capacity, will be resized based on actual count
     std::vector<llama_token> tokens(llama_n_ctx(ctx_));
     size_t n_token_count_out = 0;
 
     if (!llama_state_load_file(ctx_,
-                               cache_path.c_str(),
+                               path.c_str(),
                                tokens.data(),
                                tokens.capacity(),
                                &n_token_count_out)) {

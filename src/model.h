@@ -115,11 +115,15 @@ class ModelWeights
         return llama_model_get_vocab(model_);
     }
 
+    /// @brief Identity of the base model file (name, size, mtime)
+    [[nodiscard]] uint64_t identity() const { return identity_; }
+
   private:
     ModelWeights() = default;
 
     llama_model* model_ = nullptr;
     std::shared_ptr<common_chat_templates> templates_;
+    uint64_t identity_ = 0;
 };
 
 // Model interface - encapsulates context and text generation
@@ -203,14 +207,21 @@ class Model
         return loras_;
     }
 
-    // Save the current KV cache state (processed_tokens) to a file
-    // Returns true on success, false on failure
-    bool save_cache(const std::string& cache_path);
+    // Resolve a base cache path ("dir/foo.bin") to the file used for this
+    // Model: "dir/foo.<digest>.bin". The digest covers the base model, each
+    // LoRA adapter's contents and scale, and the context parameters, so a
+    // cache is only ever found by a Model it is valid for.
+    [[nodiscard]] std::string cache_file(const std::string& base_path) const;
 
-    // Load KV cache state from a file
-    // Returns the tokens that were cached, or empty vector on failure
+    // Save the current KV cache state (processed_tokens) to
+    // cache_file(base_path), atomically (temp file + rename)
+    // Returns true on success, false on failure
+    bool save_cache(const std::string& base_path);
+
+    // Load KV cache state from cache_file(base_path)
+    // Returns the tokens that were cached, or empty vector on a miss/failure
     // The loaded state will be applied to the context
-    std::vector<llama_token> load_cache(const std::string& cache_path);
+    std::vector<llama_token> load_cache(const std::string& base_path);
 
   private:
     // Set the internal cache state (used when loading from prompt cache)
@@ -233,6 +244,8 @@ class Model
     // order. Set on this Model's context only, so different Model instances
     // sharing the same ModelWeights can carry independent adapters.
     std::vector<llama_adapter_lora*> loras_;
+    // Digest of base model + adapters + context params; fixed once built
+    uint64_t cache_digest_ = 0;
     std::vector<llama_token> processed_tokens_; // Track tokens in KV cache
     int n_past_ = 0;                            // Track position in KV cache
     ModelConfig config_;
