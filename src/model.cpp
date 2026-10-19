@@ -1,4 +1,5 @@
 #include "model.h"
+#include "cache_metadata.h"
 #include "chat.h"
 #include "error.h"
 #include <algorithm>
@@ -28,7 +29,7 @@ fnv_hash(const uint8_t* data,
 }
 
 // Stable content fingerprint used to check whether a saved cache matches the
-// adapter files configured for the current model.
+// model and adapter files configured for the current model.
 std::string
 fingerprint_file_contents(const std::string& path)
 {
@@ -54,21 +55,6 @@ fingerprint_file_contents(const std::string& path)
 
     std::ostringstream result;
     result << std::hex << std::setw(16) << std::setfill('0') << hash;
-    return result.str();
-}
-
-std::string
-cache_metadata(const std::vector<LoraAdapterConfig>& adapters)
-{
-    std::ostringstream result;
-    result << "agent-cpp-cache-v1\n" << adapters.size() << '\n';
-    for (const auto& adapter : adapters) {
-        const auto fingerprint = fingerprint_file_contents(adapter.path);
-        if (fingerprint.empty()) {
-            return {};
-        }
-        result << fingerprint << ' ' << std::hexfloat << adapter.scale << '\n';
-    }
     return result.str();
 }
 
@@ -99,6 +85,7 @@ ModelWeights::create(const std::string& model_path)
 
     ggml_backend_load_all();
 
+    weights->fingerprint_ = fingerprint_file_contents(model_path);
     llama_model_params model_params = llama_model_default_params();
     weights->model_ =
       llama_model_load_from_file(model_path.c_str(), model_params);
@@ -161,6 +148,7 @@ Model::Model(Model&& other) noexcept
   , sampler_(other.sampler_)
   , grammar_sampler_(other.grammar_sampler_)
   , loras_(std::move(other.loras_))
+  , lora_fingerprints_(std::move(other.lora_fingerprints_))
   , processed_tokens_(std::move(other.processed_tokens_))
   , n_past_(other.n_past_)
   , config_(other.config_)
@@ -190,6 +178,7 @@ Model::operator=(Model&& other) noexcept
         sampler_ = other.sampler_;
         grammar_sampler_ = other.grammar_sampler_;
         loras_ = std::move(other.loras_);
+        lora_fingerprints_ = std::move(other.lora_fingerprints_);
         processed_tokens_ = std::move(other.processed_tokens_);
         n_past_ = other.n_past_;
         config_ = other.config_;
@@ -223,7 +212,10 @@ Model::initialize_context(const ModelConfig& model_config)
     if (!model_config.loras.empty()) {
         std::vector<float> scales;
         scales.reserve(model_config.loras.size());
+        lora_fingerprints_.reserve(model_config.loras.size());
         for (const LoraAdapterConfig& lora_config : model_config.loras) {
+            lora_fingerprints_.push_back(
+              fingerprint_file_contents(lora_config.path));
             llama_adapter_lora* lora = llama_adapter_lora_init(
               weights_->get_model(), lora_config.path.c_str());
             if (lora == nullptr) {
@@ -482,7 +474,8 @@ Model::generate_from_tokens(const std::vector<llama_token>& all_tokens,
 bool
 Model::save_cache(const std::string& cache_path)
 {
-    const auto metadata = cache_metadata(config_.loras);
+    const auto metadata = detail::cache_metadata(
+      weights_->fingerprint_, config_.loras, lora_fingerprints_);
     if (metadata.empty() ||
         !llama_state_save_file(ctx_,
                                cache_path.c_str(),
@@ -502,7 +495,8 @@ Model::save_cache(const std::string& cache_path)
 std::vector<llama_token>
 Model::load_cache(const std::string& cache_path)
 {
-    const auto expected_metadata = cache_metadata(config_.loras);
+    const auto expected_metadata = detail::cache_metadata(
+      weights_->fingerprint_, config_.loras, lora_fingerprints_);
     if (expected_metadata.empty()) {
         return {};
     }

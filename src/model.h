@@ -120,6 +120,7 @@ class ModelWeights
 
     llama_model* model_ = nullptr;
     std::shared_ptr<common_chat_templates> templates_;
+    std::string fingerprint_;
 };
 
 // Model interface - encapsulates context and text generation
@@ -233,6 +234,7 @@ class Model
     // order. Set on this Model's context only, so different Model instances
     // sharing the same ModelWeights can carry independent adapters.
     std::vector<llama_adapter_lora*> loras_;
+    std::vector<std::string> lora_fingerprints_;
     std::vector<llama_token> processed_tokens_; // Track tokens in KV cache
     int n_past_ = 0;                            // Track position in KV cache
     ModelConfig config_;
