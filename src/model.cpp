@@ -2,11 +2,77 @@
 #include "chat.h"
 #include "error.h"
 #include <algorithm>
+#include <cstdint>
 #include <cstdio>
 #include <fstream>
+#include <iomanip>
 #include <sstream>
 
 namespace agent_cpp {
+
+namespace {
+
+// Keep the FNV-1a implementation and constants consistent with llama.cpp's
+// ggml-rpc.cpp fnv_hash helper.
+uint64_t
+fnv_hash(const uint8_t* data,
+         size_t len,
+         uint64_t hash = 0xcbf29ce484222325ULL)
+{
+    const uint64_t fnv_prime = 0x100000001b3ULL;
+    for (size_t i = 0; i < len; ++i) {
+        hash ^= data[i];
+        hash *= fnv_prime;
+    }
+    return hash;
+}
+
+// Stable content fingerprint used to check whether a saved cache matches the
+// adapter files configured for the current model.
+std::string
+fingerprint_file_contents(const std::string& path)
+{
+    std::ifstream file(path, std::ios::binary);
+    if (!file) {
+        return {};
+    }
+
+    uint64_t hash = 0xcbf29ce484222325ULL;
+    char buffer[8192];
+    while (file) {
+        file.read(buffer, sizeof(buffer));
+        const auto count = file.gcount();
+        if (count > 0) {
+            hash = fnv_hash(reinterpret_cast<const uint8_t*>(buffer),
+                            static_cast<size_t>(count),
+                            hash);
+        }
+    }
+    if (!file.eof()) {
+        return {};
+    }
+
+    std::ostringstream result;
+    result << std::hex << std::setw(16) << std::setfill('0') << hash;
+    return result.str();
+}
+
+std::string
+cache_metadata(const std::vector<LoraAdapterConfig>& adapters)
+{
+    std::ostringstream result;
+    result << "agent-cpp-cache-v1\n" << adapters.size() << '\n';
+    for (const auto& adapter : adapters) {
+        const auto fingerprint = fingerprint_file_contents(adapter.path);
+        if (fingerprint.empty()) {
+            return {};
+        }
+        result << fingerprint << ' ' << std::hexfloat << adapter.scale << '\n';
+    }
+    return result.str();
+}
+
+} // namespace
 
 std::string
 load_grammar_file(const std::string& grammar_path)
@@ -416,15 +482,40 @@ Model::generate_from_tokens(const std::vector<llama_token>& all_tokens,
 bool
 Model::save_cache(const std::string& cache_path)
 {
-    return llama_state_save_file(ctx_,
-                                 cache_path.c_str(),
-                                 processed_tokens_.data(),
-                                 processed_tokens_.size());
+    const auto metadata = cache_metadata(config_.loras);
+    if (metadata.empty() ||
+        !llama_state_save_file(ctx_,
+                               cache_path.c_str(),
+                               processed_tokens_.data(),
+                               processed_tokens_.size())) {
+        return false;
+    }
+
+    std::ofstream metadata_file(cache_path + ".meta", std::ios::trunc);
+    if (!metadata_file) {
+        return false;
+    }
+    metadata_file << metadata;
+    return static_cast<bool>(metadata_file);
 }
 
 std::vector<llama_token>
 Model::load_cache(const std::string& cache_path)
 {
+    const auto expected_metadata = cache_metadata(config_.loras);
+    if (expected_metadata.empty()) {
+        return {};
+    }
+    std::ifstream metadata_file(cache_path + ".meta");
+    if (!metadata_file) {
+        return {};
+    }
+    std::ostringstream saved_metadata;
+    saved_metadata << metadata_file.rdbuf();
+    if (saved_metadata.str() != expected_metadata) {
+        return {};
+    }
+
     // Start with a reasonable capacity, will be resized based on actual count
     std::vector<llama_token> tokens(llama_n_ctx(ctx_));
     size_t n_token_count_out = 0;
