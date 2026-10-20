@@ -475,7 +475,7 @@ bool
 Model::save_cache(const std::string& cache_path)
 {
     const auto metadata = detail::cache_metadata(
-      weights_->fingerprint_, config_.loras, lora_fingerprints_);
+      weights_->fingerprint_, config_, lora_fingerprints_);
     if (metadata.empty() ||
         !llama_state_save_file(ctx_,
                                cache_path.c_str(),
@@ -496,7 +496,7 @@ std::vector<llama_token>
 Model::load_cache(const std::string& cache_path)
 {
     const auto expected_metadata = detail::cache_metadata(
-      weights_->fingerprint_, config_.loras, lora_fingerprints_);
+      weights_->fingerprint_, config_, lora_fingerprints_);
     if (expected_metadata.empty()) {
         return {};
     }
